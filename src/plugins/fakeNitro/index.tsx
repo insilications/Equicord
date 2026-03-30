@@ -412,6 +412,14 @@ export default definePlugin({
                 replace: "true"
             }
         },
+        // Patch to enable toggling Favorites server
+        {
+            find: "={isPremium",
+            replacement: {
+                match: /(isPremiumExactly:)\i/,
+                replace: "$1() => true"
+            }
+        }
     ],
 
     get guildId() {

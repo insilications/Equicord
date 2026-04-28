@@ -23,8 +23,9 @@ import { readFileSync } from "fs";
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import path, { join } from "path";
 import Zip from "zip-local";
+import { WebSocketServer } from 'ws';
 
-import { BUILD_TIMESTAMP, commonOpts, globPlugins, IS_DEV, IS_REPORTER, IS_COMPANION_TEST, IS_STANDALONE, VERSION, commonRendererPlugins, buildOrWatchAll, stringifyValues, IS_ANTI_CRASH_TEST } from "./common.mjs";
+import { BUILD_TIMESTAMP, commonOpts, globPlugins, IS_DEV, IS_RELOAD_EXT, IS_REPORTER, IS_COMPANION_TEST, VERSION, commonRendererPlugins, buildOrWatchAll, stringifyValues, IS_ANTI_CRASH_TEST } from "./common.mjs";
 
 /**
  * @type {import("esbuild").BuildOptions}
@@ -63,6 +64,56 @@ const MonacoWorkerEntryPoints = [
     "vs/editor/editor.worker.js"
 ];
 
+/**
+ * @type {WebSocketServer | null}
+ */
+let wss = null;
+
+if (IS_RELOAD_EXT) {
+    wss = new WebSocketServer({ port: 8087 });
+}
+
+/**
+ * @type {import("esbuild").Plugin}
+ */
+export const buildStandAloneExtension = {
+    name: "build-standalone",
+    setup(build) {
+        build.onEnd(async (result) => {
+            if (result.errors.length === 0) {
+                const appendCssRuntime = readFile("dist/Equicord.user.css", "utf-8").then(content => {
+                    const cssRuntime = `unsafeWindow._vcUserScriptRendererCss=\`${content.replaceAll("`", "\\`")}\``;
+
+                    return appendFile("dist/Equicord.user.js", cssRuntime);
+                });
+
+                await Promise.all([
+                 appendCssRuntime,
+                buildExtension("chromium-unpacked", ["background_chrome.js","modifyResponseHeaders.json", "content.js", "manifest.json", "icon.png"]),
+                ]);
+
+                console.log('✔ Build successful. Signaling extension to reload...');
+                if (wss) {
+                    wss.clients.forEach(client => {
+                        if (client.readyState === 1) { // WebSocket.OPEN
+                            client.send('reload');
+                        }
+                    });
+                }
+            }
+        });
+    },
+};
+
+/**
+ * @type {import("esbuild").Plugin[]}
+ */
+const browserExtensionPlugins = [...commonOptions.plugins]
+
+if (IS_RELOAD_EXT) {
+    browserExtensionPlugins.push(buildStandAloneExtension)
+}
+
 /** @type {import("esbuild").BuildOptions[]} */
 const buildConfigs = [
     {
@@ -90,6 +141,7 @@ const buildConfigs = [
     },
     {
         ...commonOptions,
+        plugins: browserExtensionPlugins,
         outfile: "dist/browser/extension.js",
         define: {
             ...commonOptions.define,
@@ -166,8 +218,18 @@ async function buildExtension(target, files) {
                 content = Buffer.from(new TextEncoder().encode(JSON.stringify(json)));
             }
 
+            // f.startsWith("manifest") ? "manifest.json" : f
+            let fileName= "";
+            if (f.startsWith("manifest")) {
+                fileName = "manifest.json";
+            } else if (f.startsWith("background_chrome.js")) {
+                fileName = "background.js";
+            } else {
+                fileName = f;
+            }
+
             return [
-                f.startsWith("manifest") ? "manifest.json" : f,
+                fileName,
                 content
             ];
         })))
@@ -190,7 +252,7 @@ const appendCssRuntime = readFile("dist/Equicord.user.css", "utf-8").then(conten
     return appendFile("dist/Equicord.user.js", cssRuntime);
 });
 
-if (!process.argv.includes("--skip-extension")) {
+if (!process.argv.includes("--skip-extension") && !IS_RELOAD_EXT) {
     await Promise.all([
         appendCssRuntime,
         buildExtension("chromium-unpacked", ["modifyResponseHeaders.json", "content.js", "manifest.json", "icon.png"]),

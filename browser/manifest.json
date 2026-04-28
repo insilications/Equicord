@@ -15,6 +15,9 @@
     "permissions": [
         "declarativeNetRequest"
     ],
+    "background": {
+        "service_worker": "background.js"
+    },
     "content_scripts": [
         {
             "run_at": "document_start",

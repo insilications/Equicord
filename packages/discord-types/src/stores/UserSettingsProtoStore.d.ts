@@ -168,6 +168,20 @@ export interface InAppFeedbackSettings {
     inAppFeedbackStates: Record<string, any>;
 }
 
+export interface FavoriteChannels {
+    id: string;
+    nickname: string;
+    type: number;
+    position: number;
+    parentId: string;
+}
+
+
+export interface Favorites {
+    favoriteChannels: Record<string, FavoriteChannels>;
+    muted: boolean;
+}
+
 export interface UserSettings {
     versions: UserSettingsVersions;
     inbox: InboxSettings;
@@ -187,6 +201,7 @@ export interface UserSettings {
     audioContextSettings: AudioContextSettings;
     clips: ClipsSettings;
     inAppFeedbackSettings: InAppFeedbackSettings;
+    favorites: Favorites;
 }
 
 export interface FrecencySettings {

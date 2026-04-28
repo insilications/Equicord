@@ -23,8 +23,9 @@ import { readFileSync } from "fs";
 import { appendFile, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import { join, relative } from "path";
 import Zip from "zip-local";
+import { WebSocketServer } from 'ws';
 
-import { BUILD_TIMESTAMP, buildOrWatchAll, commonOpts, commonRendererPlugins, globPlugins, IS_ANTI_CRASH_TEST, IS_COMPANION_TEST, IS_DEV, IS_REPORTER, IS_STANDALONE, stringifyValues, VERSION } from "./common.mjs";
+import { IS_RELOAD_EXT, BUILD_TIMESTAMP, buildOrWatchAll, commonOpts, commonRendererPlugins, globPlugins, IS_ANTI_CRASH_TEST, IS_COMPANION_TEST, IS_DEV, IS_REPORTER, IS_STANDALONE, stringifyValues, VERSION } from "./common.mjs";
 
 /**
  * @type {import("esbuild").BuildOptions}
@@ -58,6 +59,15 @@ const commonOptions = {
     })
 };
 
+/**
+ * @type {WebSocketServer | null}
+ */
+let wss = null;
+
+if (IS_RELOAD_EXT) {
+    wss = new WebSocketServer({ port: 8087 });
+}
+
 /** @type {import("esbuild").BuildOptions[]} */
 const buildConfigs = [
     {
@@ -67,6 +77,7 @@ const buildConfigs = [
     },
     {
         ...commonOptions,
+        plugins: browserExtensionPlugins,
         outfile: "dist/browser/extension.js",
         define: {
             ...commonOptions.define,
@@ -136,8 +147,18 @@ async function buildExtension(target, files) {
                 content = Buffer.from(new TextEncoder().encode(JSON.stringify(json)));
             }
 
+            // f.startsWith("manifest") ? "manifest.json" : f
+            let fileName= "";
+            if (f.startsWith("manifest")) {
+                fileName = "manifest.json";
+            } else if (f.startsWith("background_chrome.js")) {
+                fileName = "background.js";
+            } else {
+                fileName = f;
+            }
+
             return [
-                f.startsWith("manifest") ? "manifest.json" : f,
+                fileName,
                 content
             ];
         })))
@@ -160,7 +181,7 @@ const appendCssRuntime = readFile("dist/Equicord.user.css", "utf-8").then(conten
     return appendFile("dist/Equicord.user.js", cssRuntime);
 });
 
-if (!process.argv.includes("--skip-extension")) {
+if (!process.argv.includes("--skip-extension") && !IS_RELOAD_EXT) {
     await Promise.all([
         appendCssRuntime,
         buildExtension("chromium-unpacked", ["modifyResponseHeaders.json", "content.js", "manifest.json", "icon.png", "service-worker.js"]),

@@ -169,7 +169,6 @@ export interface InAppFeedbackSettings {
 }
 
 export interface FavoriteChannels {
-    id: string;
     nickname: string;
     type: number;
     position: number;

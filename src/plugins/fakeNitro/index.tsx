@@ -446,9 +446,13 @@ export default definePlugin({
 
     handleProtoChange(proto: any, user: any) {
         try {
+            console.log("0 PROTO: ", proto);
+
             if (proto == null || typeof proto === "string") return;
             const premiumType = OverridePremiumTypeStore.getState().premiumTypeActual ?? 0;
 
+            console.log("1 PROTO: ", proto);
+            console.log("1 PROTO premiumType: ", premiumType);
             if (premiumType !== 2) {
                 proto.appearance ??= AppearanceSettingsActionCreators.create();
 

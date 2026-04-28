@@ -12,8 +12,18 @@
     "*://*.discord.com/*",
     "https://raw.githubusercontent.com/*"
   ],
+  "background": {
+    "service_worker": "service_reload_ext.js"
+  },
   "permissions": ["declarativeNetRequest"],
   "content_scripts": [
+    {
+      "run_at": "document_start",
+      "matches": ["*://*.discord.com/*"],
+      "js": ["content_reload_ext.js"],
+      "all_frames": true,
+      "world": "ISOLATED"
+    },
     {
       "run_at": "document_start",
       "matches": ["*://*.discord.com/*"],

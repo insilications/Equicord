@@ -71,12 +71,23 @@ let wss = null;
 
 if (IS_RELOAD_EXT) {
     wss = new WebSocketServer({ port: 8087 });
+
+    // Keep-alive heartbeat: broadcast a ping every 25 seconds
+    setInterval(() => {
+        if (wss != null) {
+            wss.clients.forEach(client => {
+                if (client.readyState === 1) { // WebSocket.OPEN
+                client.send('ping');
+                }
+            });
+        }
+    }, 25000);
 }
 
 /**
  * @type {import("esbuild").Plugin}
  */
-export const buildStandAloneExtension = {
+export const buildStandaloneReloadExtension = {
     name: "build-standalone",
     setup(build) {
         build.onEnd(async (result) => {
@@ -89,7 +100,7 @@ export const buildStandAloneExtension = {
 
                 await Promise.all([
                  appendCssRuntime,
-                buildExtension("chromium-unpacked", ["background_chrome.js","modifyResponseHeaders.json", "content.js", "manifest.json", "icon.png"]),
+                buildExtensionReload("chromium-unpacked", ["service_reload_ext.js", "content_reload_ext.js","modifyResponseHeaders.json", "content.js", "manifest_reload_ext.json", "icon.png"]),
                 ]);
 
                 console.log('✔ Build successful. Signaling extension to reload...');
@@ -111,7 +122,7 @@ export const buildStandAloneExtension = {
 const browserExtensionPlugins = [...commonOptions.plugins]
 
 if (IS_RELOAD_EXT) {
-    browserExtensionPlugins.push(buildStandAloneExtension)
+    browserExtensionPlugins.push(buildStandaloneReloadExtension)
 }
 
 /** @type {import("esbuild").BuildOptions[]} */
@@ -205,6 +216,49 @@ async function loadDir(dir, basePath = "") {
 /**
   * @type {(target: string, files: string[]) => Promise<void>}
  */
+async function buildExtensionReload(target, files) {
+    const entries = {
+        "dist/Equicord.js": await readFile("dist/browser/extension.js"),
+        "dist/Equicord.css": await readFile("dist/browser/extension.css"),
+        ...await loadDir("dist/browser/vendor/monaco", "dist/browser/"),
+        ...Object.fromEntries(await Promise.all(files.map(async f => {
+            let content = await readFile(join("browser", f));
+            if (f.startsWith("manifest")) {
+                const json = JSON.parse(content.toString("utf-8"));
+                json.version = VERSION;
+                content = Buffer.from(new TextEncoder().encode(JSON.stringify(json)));
+            }
+
+            let fileName= "";
+            if (f.startsWith("manifest_reload_ext")) {
+                fileName = "manifest.json";
+            } else if (f.startsWith("content_reload_ext.js")) {
+                fileName = "content_reload_ext.js";
+            } else {
+                fileName = f;
+            }
+
+            return [
+                fileName,
+                content
+            ];
+        })))
+    };
+
+    await rm(target, { recursive: true, force: true });
+    await Promise.all(Object.entries(entries).map(async ([file, content]) => {
+        const dest = join("dist/browser", target, file);
+        const parentDirectory = join(dest, "..");
+        await mkdir(parentDirectory, { recursive: true });
+        await writeFile(dest, content);
+    }));
+
+    console.info("Unpacked Extension written to dist/browser/" + target);
+}
+
+/**
+  * @type {(target: string, files: string[]) => Promise<void>}
+ */
 async function buildExtension(target, files) {
     const entries = {
         "dist/Equicord.js": await readFile("dist/browser/extension.js"),
@@ -218,18 +272,8 @@ async function buildExtension(target, files) {
                 content = Buffer.from(new TextEncoder().encode(JSON.stringify(json)));
             }
 
-            // f.startsWith("manifest") ? "manifest.json" : f
-            let fileName= "";
-            if (f.startsWith("manifest")) {
-                fileName = "manifest.json";
-            } else if (f.startsWith("background_chrome.js")) {
-                fileName = "background.js";
-            } else {
-                fileName = f;
-            }
-
             return [
-                fileName,
+                f.startsWith("manifest") ? "manifest.json" : f,
                 content
             ];
         })))

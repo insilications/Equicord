@@ -4,14 +4,17 @@
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
-import "./style.css";
-
-import { NavContextMenuPatchCallback } from "@api/ContextMenu";
+import { addContextMenuPatch, addGlobalContextMenuPatch, findGroupChildrenByChildId, GlobalContextMenuPatchCallback, NavContextMenuPatchCallback, removeGlobalContextMenuPatch } from "@api/ContextMenu";
+import { DataStore } from "@api/index";
+import { definePluginSettings } from "@api/Settings";
+import { FavoriteIcon } from "@components/Icons";
 import { Devs } from "@utils/constants";
 import { Logger } from "@utils/Logger";
-import definePlugin from "@utils/types";
-import { Channel, type FavoriteChannels, type Guild } from "@vencord/discord-types";
+import definePlugin, { StartAt } from "@utils/types";
+import { Channel, type FavoriteChannel, type FavoriteChannels, type Favorites, type Guild } from "@vencord/discord-types";
+import { ChannelType } from "@vencord/discord-types/enums";
 import { findByPropsLazy, proxyLazyWebpack } from "@webpack";
+import { sleep } from "@utils/misc";
 import {
     ChannelStore,
     FluxDispatcher,
@@ -21,42 +24,44 @@ import {
     UserSettingsActionCreators,
     UserSettingsProtoStore
 } from "@webpack/common";
+import type { ReactElement } from "react";
 
-const BINARY_READ_OPTIONS = findByPropsLazy("readerFactory");
+import type { ChannelContextProps, UserSettingsProtoUpdateEditInfoEvent, UserSettingsProtoUpdateEvent } from "./types";
+import { getChannelTypeName, isFavorite, searchProtoClassField } from "./utils";
+
 const FavoritesLogger = new Logger("Favorites");
+let FavoritesCache: Favorites = Object.create(null);
 
-function searchProtoClassField(localName: string, protoClass: any) {
-    const field = protoClass?.fields?.find((field: any) => field.localName === localName);
-    if (!field) return;
+const FAVORITES_DATA_KEY = "FavoritesData";
+const BINARY_READ_OPTIONS: any = findByPropsLazy("readerFactory");
+const PreloadedUserSettingsActionCreators: any = proxyLazyWebpack(() => UserSettingsActionCreators.PreloadedUserSettingsActionCreators);
+const FavoritesSettingsActionCreators: any = proxyLazyWebpack(() => searchProtoClassField("favorites", PreloadedUserSettingsActionCreators.ProtoClass));
+// const FavoritesSettingsActionCreators: any = proxyLazyWebpack(() => searchProtoClassField("favorites", PreloadedUserSettingsActionCreators.ProtoClass));
+const FavoriteChannelActionCreators: any = proxyLazyWebpack(() => searchProtoClassField("favoriteChannels", FavoritesSettingsActionCreators));
+// const FavoriteChannelActionCreators: any = proxyLazyWebpack(() => searchProtoClassField("favoriteChannels", FavoritesSettingsActionCreators));
 
-    const fieldGetter = Object.values(field).find(value => typeof value === "function") as any;
-    return fieldGetter?.();
+export function updateFavoritesCache(favoriteChannels: FavoriteChannels, muted: boolean): void {
+    const newFavorites: Favorites = Object.create(null);
+    const newFavoriteChannels: FavoriteChannels = Object.create(null);
+
+    const favoriteChannelIds: string[] = Object.keys(favoriteChannels);
+    for (let i = 0, favoriteChannelIdsLen = favoriteChannelIds.length; i < favoriteChannelIdsLen; i++) {
+        const key: string = favoriteChannelIds[i]!;
+        const value: FavoriteChannel = favoriteChannels[key];
+        newFavoriteChannels[key] = value;
+    }
+    newFavorites.favoriteChannels = newFavoriteChannels;
+    newFavorites.muted = muted;
+
+    FavoritesCache = newFavorites;
 }
 
-const PreloadedUserSettingsActionCreators = proxyLazyWebpack(() => UserSettingsActionCreators.PreloadedUserSettingsActionCreators);
-const FavoritesSettingsActionCreators = proxyLazyWebpack(() => searchProtoClassField("favorites", PreloadedUserSettingsActionCreators.ProtoClass));
-const PreloadedFavoriteChannelActionCreators = proxyLazyWebpack(() => UserSettingsActionCreators.FavoriteChannelActionCreators);
+export const settings = definePluginSettings({}).withPrivateSettings<{
+    favorites: Favorites | undefined;
+    firstRun: boolean | undefined;
+}>();
 
-export function FavoriteIcon() {
-    return (
-        <svg
-            aria-hidden="true"
-            role="img"
-            xmlns="http://www.w3.org/2000/svg"
-            width="24"
-            height="24"
-            fill="none"
-            viewBox="0 0 24 24"
-        >
-            <path
-                fill="currentColor"
-                d="M10.81 2.86c.38-1.15 2-1.15 2.38 0l1.89 5.83h6.12c1.2 0 1.71 1.54.73 2.25l-4.95 3.6 1.9 5.82a1.25 1.25 0 0 1-1.93 1.4L12 18.16l-4.95 3.6c-.98.7-2.3-.25-1.92-1.4l1.89-5.82-4.95-3.6a1.25 1.25 0 0 1 .73-2.25h6.12l1.9-5.83Z"
-            ></path>
-        </svg>
-    );
-}
-
-function addToFavorite(channel: any) {
+async function addToFavorites(channel: Channel): Promise<void> {
     try {
         if (!channel) {
             Toasts.show({
@@ -66,12 +71,11 @@ function addToFavorite(channel: any) {
             });
             return;
         }
-        FavoritesLogger.log("channel: ", channel);
-        const channelId = channel.id;
-        FavoritesLogger.log("channelId: ", channelId);
+        const channelId: string = channel.id;
+        FavoritesLogger.log("addToFavorites - channel: ", channel);
 
-        const guildId = channel.guild_id;
-        if (!guildId || typeof guildId !== "string") {
+        const guildId: string = channel.guild_id;
+        if (!guildId) {
             Toasts.show({
                 type: Toasts.Type.FAILURE,
                 message: "Channel information not available.",
@@ -79,254 +83,104 @@ function addToFavorite(channel: any) {
             });
             return;
         }
-        FavoritesLogger.log("guildId: ", guildId);
+        FavoritesLogger.log("addToFavorites - guildId: ", guildId);
 
-        if (PreloadedUserSettingsActionCreators == null || FavoritesSettingsActionCreators == null || PreloadedFavoriteChannelActionCreators == null || !BINARY_READ_OPTIONS) {
-            FavoritesLogger.error("PreloadedUserSettingsActionCreators: ", PreloadedUserSettingsActionCreators);
-            FavoritesLogger.error("FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
-            FavoritesLogger.error("PreloadedFavoriteChannelActionCreators: ", PreloadedFavoriteChannelActionCreators);
-            FavoritesLogger.error("BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
+        if (PreloadedUserSettingsActionCreators == null || FavoritesSettingsActionCreators == null || FavoriteChannelActionCreators == null || !BINARY_READ_OPTIONS) {
+            FavoritesLogger.error("addToFavorites - PreloadedUserSettingsActionCreators: ", PreloadedUserSettingsActionCreators);
+            FavoritesLogger.error("addToFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
+            FavoritesLogger.error("addToFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
+            FavoritesLogger.error("addToFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
             Toasts.show({
                 type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
+                message: "Failed to add to favorites.",
                 id: Toasts.genId(),
             });
             return;
         }
+
+        const preloadedUserSettingsFavorites: Favorites = await DataStore.get<Favorites>(FAVORITES_DATA_KEY) ?? { favoriteChannels: {}, muted: false };
         FavoritesLogger.log(
-            "PreloadedUserSettingsActionCreators: ",
-            PreloadedUserSettingsActionCreators,
-        );
-        FavoritesLogger.log(
-            "PreloadedFavoriteChannelActionCreators: ",
-            PreloadedFavoriteChannelActionCreators,
-        );
-        FavoritesLogger.log(
-            "FavoritesSettingsActionCreators: ",
-            FavoritesSettingsActionCreators,
-        );
-        FavoritesLogger.log(
-            "BINARY_READ_OPTIONS: ",
-            BINARY_READ_OPTIONS,
+            "addToFavorites - preloadedUserSettingsFavorites: ",
+            preloadedUserSettingsFavorites,
         );
 
-        const currentFavoritesSettings = PreloadedUserSettingsActionCreators.getCurrentValue().favorites;
+        const sortedChannels: (FavoriteChannel & { id: string; })[] = [];
+        const currentFavoriteChannels: Record<string, FavoriteChannel> = preloadedUserSettingsFavorites.favoriteChannels;
+        const channelIdsKeys: string[] = Object.keys(currentFavoriteChannels);
+        for (let i = 0, channelIdsKeysLen = channelIdsKeys.length; i < channelIdsKeysLen; i++) {
+            const id: string = channelIdsKeys[i];
 
-        const newFavoritesSettingsProto = FavoritesSettingsActionCreators.create();
-        // const newFavoritesSettingsProto = FavoritesSettingsActionCreators.getCurrentValue()?.create();
-        // const newFavoritesSettingsProto = FavoritesSettingsActionCreators.ProtoClass.create();
-        // const newFavoritesSettingsProto = currentFavoritesSettings != null
-        //     ? FavoritesSettingsActionCreators.fromBinary(FavoritesSettingsActionCreators.toBinary(currentFavoritesSettings), BINARY_READ_OPTIONS)
-        //     : FavoritesSettingsActionCreators.create();
+            const ch: Channel | undefined = ChannelStore.getChannel(id);
+            const favChannel: FavoriteChannel = currentFavoriteChannels[id];
 
-        FavoritesLogger.log(
-            "newFavoritesSettingsProto: ",
-            newFavoritesSettingsProto,
-        );
+            if (ch) {
+                const logs: string[] = [`addToFavorites - ${favChannel.position} - channel.id ${id} - channel.name: ${ch.name} - channel.type: ${getChannelTypeName(ch.type)}`];
 
-        // let preloadFavoriteChannels: Record<string, FavoriteChannels> | undefined | null = PreloadedUserSettingsActionCreators.getCurrentValue()?.favorites?.favoriteChannels;
-        const preloadFavoriteChannels: Record<string, FavoriteChannels> | undefined = UserSettingsProtoStore.settings?.favorites?.favoriteChannels;
-
-        if (preloadFavoriteChannels == null) {
-            FavoritesLogger.error("Favorite channels data not available.");
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
-                id: Toasts.genId(),
-            });
-            return;
-        }
-        FavoritesLogger.log(
-            "preloadFavoriteChannels: ",
-            preloadFavoriteChannels,
-        );
-
-        const sortedChannelsArray: (FavoriteChannels & { id: string; })[] = Object.entries(preloadFavoriteChannels)
-            // 1. Filter BEFORE mapping. This prevents the engine from allocating
-            // memory for objects that will just be immediately discarded.
-            .filter(([id, data]) => {
-                const ch: Channel | undefined = ChannelStore.getChannel(id);
-                if (ch != null) {
+                if (ch.type !== ChannelType.DM) {
                     const guild: Guild = GuildStore.getGuild(ch.guild_id);
-                    FavoritesLogger.log(`\n ${data.position} - channel.id ${id} - channel.name: ${ch.name} - guild.id: ${guild.id} - guild.name: ${guild.name}`, ch);
-                    return true;
+                    logs.push(` guild.id: ${guild.id} - guild.name: ${guild.name}`);
                 } else {
-                    FavoritesLogger.warn(`\n ${data.position} - channel.id ${id} not found in ChannelStore`);
-                    return false;
+                    // logs.push("Direct Message channel");
                 }
-            })
-            // .filter(([, data]) => data.position !== 0 && data.parentId !== "0")
-            // .filter(([, data]) => data.position !== 0)
-            // 2. Map to your desired structure
-            .map(([id, data]) => ({ id, ...data }))
-            // 3. Sort ascending
-            .sort((a, b) => a.position - b.position);
 
-
-        FavoritesLogger.log(
-            "sortedChannelsArray 0: ",
-            sortedChannelsArray,
-        );
-        let lastPosition: number = 0;
-        for (const channel of sortedChannelsArray) {
-            channel.position = lastPosition;
-            lastPosition++;
-        }
-        // 4. Resolve collisions in a single $O(N)$ linear pass
-        // let lastPosition = 0;
-        // for (const channel of sortedChannelsArray) {
-        //     if (channel.position <= lastPosition) {
-        //         channel.position = lastPosition + 1;
-        //     }
-        //     lastPosition = channel.position;
-        // }
-
-
-        FavoritesLogger.log(
-            "sortedChannelsArray 1: ",
-            sortedChannelsArray,
-        );
-
-        sortedChannelsArray.push({ id: channelId, nickname: "", type: 1, position: sortedChannelsArray.length + 1, parentId: guildId });
-
-        FavoritesLogger.log(
-            "sortedChannelsArray 2: ",
-            sortedChannelsArray,
-        );
-
-        for (let i: number = 0, sortedChannelsArrayLen: number = sortedChannelsArray.length; i < sortedChannelsArrayLen; i++) {
-            const channel = sortedChannelsArray[i];
-
-            const ch: Channel | undefined = ChannelStore.getChannel(channel.id);
-            if (ch != null) {
-                const guild: Guild = GuildStore.getGuild(ch.guild_id);
-                const parentId: string = ch.parent_id;
-                // const parentId: string = ch.parent_id === "0" ? "0" : channel.parentId;
-
-                FavoritesLogger.log(`\n ${channel.position} - channel.id ${channel.id} - channel.name: ${ch.name} - parentId: ${parentId} - guild.id: ${guild.id} - guild.name: ${guild.name}`, ch);
-
-
-
-                const newFav: FavoriteChannels = PreloadedFavoriteChannelActionCreators.create({
-                    nickname: channel.nickname,
-                    type: channel.type,
-                    position: channel.position,
-                    // parentId: parentId,
-                    parentId: "0",
-                    // parentId: channel.parentId,
-                });
-
-                newFavoritesSettingsProto.favoriteChannels[channel.id] = newFav;
+                sortedChannels.push({ id, ...favChannel });
+                FavoritesLogger.log(logs.join(), ch);
             } else {
-                FavoritesLogger.warn(`\n ${channel.position} - channel.id ${channel.id} not found in ChannelStore`);
+                FavoritesLogger.warn(`addToFavorites - ${favChannel.position} - channel.id ${id} not found in ChannelStore`);
             }
         }
 
-        FavoritesLogger.log(
-            "newFavoritesSettingsProto FINAL: ",
-            newFavoritesSettingsProto,
-        );
+        sortedChannels.sort((a, b) => a.position - b.position);
+        // Re-index sequentially to eliminate gaps.
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            sortedChannels[i].position = i;
+        }
 
-        const newSettingsProto = PreloadedUserSettingsActionCreators.ProtoClass.create();
-
-        FavoritesLogger.log(
-            "newSettingsProto 0: ",
-            newSettingsProto,
-        );
-
-        newSettingsProto.favorites = newFavoritesSettingsProto;
+        // Add the new favorite channel at the end of the list with the next available position
+        sortedChannels.push({ id: channelId, nickname: "", type: 1, position: sortedChannels.length + 1, parentId: guildId });
 
         FavoritesLogger.log(
-            "newSettingsProto 1: ",
-            newSettingsProto,
+            "addToFavorites - sortedChannels: ",
+            sortedChannels,
         );
 
-        FluxDispatcher.dispatch({
+        const favoritesSettingsProto: Favorites = FavoritesSettingsActionCreators.create();
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            const channel: FavoriteChannel & { id: string; } = sortedChannels[i];
+            const newFavChannel: FavoriteChannel = FavoriteChannelActionCreators.create({
+                nickname: channel.nickname,
+                type: channel.type,
+                position: channel.position,
+                parentId: channel.parentId,
+            });
+            favoritesSettingsProto.favoriteChannels[channel.id] = newFavChannel;
+        }
+        // FavoritesLogger.log(
+        //     "addToFavorites - favoritesSettingsProto: ",
+        //     favoritesSettingsProto,
+        // );
+
+        const settingsProto: any = PreloadedUserSettingsActionCreators.ProtoClass.create();
+        settingsProto.favorites = favoritesSettingsProto;
+        FavoritesLogger.log(
+            "addToFavorites - settingsProto: ",
+            settingsProto,
+        );
+
+        await FluxDispatcher.dispatch({
             type: "USER_SETTINGS_PROTO_UPDATE",
             local: true,
             partial: true,
             settings: {
                 type: 1,
-                proto: newSettingsProto,
+                proto: settingsProto,
             },
         });
 
-        // const keys = Object.keys(preloadFavoriteChannels);
-        // const sortedChannelsArray = [];
-        // // 1. Filter, Extract, and Clone in a single pass
-        // for (let i = 0; i < keys.length; i++) {
-        //     const id = keys[i];
-        //     const data = preloadFavoriteChannels[id];
-
-        //     if (data.position !== 0 && data.parentId !== "0") {
-        //         // getOwnPropertyDescriptors captures ALL own properties exactly as they are,
-        //         // including non-enumerable ones and symbols.
-        //         const descriptors = Object.getOwnPropertyDescriptors(data);
-
-        //         // defineProperties applies those exact descriptors to a new object,
-        //         // while we inject the new 'id' property upfront.
-        //         const clonedChannel = Object.defineProperties(
-        //             { id },
-        //             descriptors,
-        //         );
-
-        //         sortedChannelsArray.push(clonedChannel);
-        //     }
-        // }
-
-        // // 2. Sort ascending
-        // sortedChannelsArray.sort((a, b) => a.position - b.position);
-
-        // // 3. Resolve collisions linearly
-        // let lastPosition = 0;
-        // for (const channel of sortedChannelsArray) {
-        //     if (channel.position <= lastPosition) {
-        //         channel.position = lastPosition + 1;
-        //     }
-        //     lastPosition = channel.position;
-        // }
-
-        // // const newFav1 = FavoriteChannelActionCreators.create({
-        // const newFav1 = PreloadedFavoriteChannelActionCreators.create({
-        //     nickname: "",
-        //     type: 1,
-        //     position: sortedChannelsArray.length + 1,
-        //     parentId: guildId,
-        // });
-        // // console.log("newFav1: ", newFav1);
-        // newFav1.id = channelId;
-        // // console.log("newFav1 with id: ", newFav1);
-        // sortedChannelsArray.push(newFav1);
-        // // console.log("sortedChannelsArray: ", sortedChannelsArray);
-
-        // const newFavoriteChannels = {};
-        // for (const channel of sortedChannelsArray) {
-        //     // console.log("channel: ", channel);
-        //     const id = channel.id;
-        //     const descriptors = Object.getOwnPropertyDescriptors(channel);
-        //     // console.log("descriptors: ", descriptors);
-        //     const clonedChannel = Object.defineProperties({ id }, descriptors);
-        //     // console.log("clonedChannel: ", clonedChannel);
-        //     //             newFavoriteChannels[id] = { ...channel };
-        //     newFavoriteChannels[id] = clonedChannel;
-        // }
-        // FavoritesLogger.log("newFavoriteChannels: ", newFavoriteChannels);
-
-        // UserSettingsProtoStore.settings.favorites.favoriteChannels = newFavoriteChannels;
-
-        // const proto = PreloadedUserSettingsActionCreators.ProtoClass.create();
-        // // const proto = UserSettingsProtoStore.settings;
-        // FluxDispatcher.dispatch({
-        //     type: "USER_SETTINGS_PROTO_UPDATE",
-        //     local: true,
-        //     partial: true,
-        //     settings: {
-        //         type: 1,
-        //         proto: UserSettingsProtoStore.settings,
-        //     },
-        // });
-    } catch (error) {
-        FavoritesLogger.error("Error in addToFavorite:", error);
+        // await DataStore.set(FAVORITES_DATA_KEY, { favoriteChannels: favoritesSettingsProto.favoriteChannels, muted: preloadedUserSettingsFavorites.muted });
+        // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
+    } catch (err) {
+        FavoritesLogger.error("addToFavorites - error: ", err);
         Toasts.show({
             type: Toasts.Type.FAILURE,
             message: "Failed to add channel to favorites.",
@@ -335,21 +189,360 @@ function addToFavorite(channel: any) {
     }
 }
 
-const contextMenuPatch: NavContextMenuPatchCallback = (
-    children,
-    { channel },
-) => {
-    children.push(
+async function removeFromFavorites(channel: Channel): Promise<void> {
+    try {
+        if (!channel) {
+            Toasts.show({
+                type: Toasts.Type.FAILURE,
+                message: "Channel information not available.",
+                id: Toasts.genId(),
+            });
+            return;
+        }
+        const channelId: string = channel.id;
+        FavoritesLogger.log("removeFromFavorites - channel: ", channel);
+
+        const guildId: string = channel.guild_id;
+        if (!guildId) {
+            Toasts.show({
+                type: Toasts.Type.FAILURE,
+                message: "Channel information not available.",
+                id: Toasts.genId(),
+            });
+            return;
+        }
+        FavoritesLogger.log("removeFromFavorites -guildId: ", guildId);
+
+        if (PreloadedUserSettingsActionCreators == null || FavoritesSettingsActionCreators == null || FavoriteChannelActionCreators == null || !BINARY_READ_OPTIONS) {
+            FavoritesLogger.error("removeFromFavorites - PreloadedUserSettingsActionCreators: ", PreloadedUserSettingsActionCreators);
+            FavoritesLogger.error("removeFromFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
+            FavoritesLogger.error("removeFromFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
+            FavoritesLogger.error("removeFromFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
+            Toasts.show({
+                type: Toasts.Type.FAILURE,
+                message: "Failed to remove from favorites.",
+                id: Toasts.genId(),
+            });
+            return;
+        }
+
+        const preloadedUserSettingsFavorites: Favorites = await DataStore.get<Favorites>(FAVORITES_DATA_KEY) ?? { favoriteChannels: {}, muted: false };
+        FavoritesLogger.log(
+            "removeFromFavorites - preloadedUserSettingsFavorites: ",
+            preloadedUserSettingsFavorites,
+        );
+
+        const sortedChannels: (FavoriteChannel & { id: string; })[] = [];
+        const currentFavoriteChannels: Record<string, FavoriteChannel> = preloadedUserSettingsFavorites.favoriteChannels;
+        const channelIdsKeys: string[] = Object.keys(currentFavoriteChannels);
+        for (let i = 0, channelIdsKeysLen = channelIdsKeys.length; i < channelIdsKeysLen; i++) {
+            const id: string = channelIdsKeys[i];
+
+            const ch: Channel | undefined = ChannelStore.getChannel(id);
+            const favChannel: FavoriteChannel = currentFavoriteChannels[id];
+
+            if (ch && id !== channelId) {
+                const logs: string[] = [`removeFromFavorites - ${favChannel.position} - channel.id ${id} - channel.name: ${ch.name} - channel.type: ${getChannelTypeName(ch.type)}`];
+
+                if (ch.type !== ChannelType.DM) {
+                    const guild: Guild = GuildStore.getGuild(ch.guild_id);
+                    logs.push(` guild.id: ${guild.id} - guild.name: ${guild.name}`);
+                } else {
+                    // logs.push("Direct Message channel");
+                }
+
+                sortedChannels.push({ id, ...favChannel });
+                FavoritesLogger.log(logs.join(), ch);
+            } else {
+                FavoritesLogger.warn(`removeFromFavorites - ${favChannel.position} - channel.id ${id} not found in ChannelStore`);
+                FavoritesLogger.warn(`removeFromFavorites - ${favChannel.position} - ch: `, ch);
+                FavoritesLogger.warn(`removeFromFavorites - ${favChannel.position} - id: ${id} - channelId: ${channelId}`);
+            }
+        }
+
+        sortedChannels.sort((a, b) => a.position - b.position);
+        // Re-index sequentially to eliminate gaps.
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            sortedChannels[i].position = i;
+        }
+
+        FavoritesLogger.log(
+            "removeFromFavorites - sortedChannels: ",
+            sortedChannels,
+        );
+
+        const favoritesSettingsProto: Favorites = FavoritesSettingsActionCreators.create();
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            const channel: FavoriteChannel & { id: string; } = sortedChannels[i];
+            const newFavChannel: FavoriteChannel = FavoriteChannelActionCreators.create({
+                nickname: channel.nickname,
+                type: channel.type,
+                position: channel.position,
+                parentId: channel.parentId,
+            });
+            favoritesSettingsProto.favoriteChannels[channel.id] = newFavChannel;
+        }
+        // FavoritesLogger.log(
+        //     "removeFromFavorites - favoritesSettingsProto: ",
+        //     favoritesSettingsProto,
+        // );
+
+        const settingsProto: any = PreloadedUserSettingsActionCreators.ProtoClass.create();
+        settingsProto.favorites = favoritesSettingsProto;
+        FavoritesLogger.log(
+            "removeFromFavorites - settingsProto: ",
+            settingsProto,
+        );
+
+        await FluxDispatcher.dispatch({
+            type: "USER_SETTINGS_PROTO_UPDATE",
+            local: true,
+            partial: true,
+            settings: {
+                type: 1,
+                proto: settingsProto,
+            },
+        });
+
+        // await DataStore.set(FAVORITES_DATA_KEY, { favoriteChannels: favoritesSettingsProto.favoriteChannels, muted: preloadedUserSettingsFavorites.muted });
+        // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
+    } catch (err) {
+        FavoritesLogger.error("removeFromFavorites - error: ", err);
+        Toasts.show({
+            type: Toasts.Type.FAILURE,
+            message: "Failed to remove channel from favorites.",
+            id: Toasts.genId(),
+        });
+    }
+}
+
+async function refreshFavorites(): Promise<void> {
+    try {
+        if (PreloadedUserSettingsActionCreators == null || FavoritesSettingsActionCreators == null || FavoriteChannelActionCreators == null || !BINARY_READ_OPTIONS) {
+            FavoritesLogger.error("refreshFavorites - PreloadedUserSettingsActionCreators: ", PreloadedUserSettingsActionCreators);
+            FavoritesLogger.error("refreshFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
+            FavoritesLogger.error("refreshFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
+            FavoritesLogger.error("refreshFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
+            Toasts.show({
+                type: Toasts.Type.FAILURE,
+                message: "Failed to refresh favorites.",
+                id: Toasts.genId(),
+            });
+            return;
+        }
+
+        const preloadedUserSettingsFavorites: Favorites =
+            settings.store.firstRun === undefined
+                ? (UserSettingsProtoStore.settings.favorites ?? { favoriteChannels: {}, muted: false })
+                : await DataStore.get<Favorites>(FAVORITES_DATA_KEY) ?? { favoriteChannels: {}, muted: false };
+        FavoritesLogger.log(
+            "refreshFavorites - preloadedUserSettingsFavorites: ",
+            preloadedUserSettingsFavorites,
+        );
+
+        const sortedChannels: (FavoriteChannel & { id: string; })[] = [];
+        const currentFavoriteChannels: Record<string, FavoriteChannel> = preloadedUserSettingsFavorites.favoriteChannels;
+        const channelIdsKeys: string[] = Object.keys(currentFavoriteChannels);
+        for (let i = 0, channelIdsKeysLen = channelIdsKeys.length; i < channelIdsKeysLen; i++) {
+            const id: string = channelIdsKeys[i];
+
+            const ch: Channel | undefined = ChannelStore.getChannel(id);
+            const favChannel: FavoriteChannel = currentFavoriteChannels[id];
+
+            if (ch) {
+                const logs: string[] = [`refreshFavorites - ${favChannel.position} - channel.id ${id} - channel.name: ${ch.name} - channel.type: ${getChannelTypeName(ch.type)}`];
+
+                if (ch.type !== ChannelType.DM) {
+                    const guild: Guild = GuildStore.getGuild(ch.guild_id);
+                    logs.push(` guild.id: ${guild.id} - guild.name: ${guild.name}`);
+                } else {
+                    // logs.push("Direct Message channel");
+                }
+
+                sortedChannels.push({ id, ...favChannel });
+                FavoritesLogger.log(logs.join(), ch);
+            } else {
+                FavoritesLogger.warn(`refreshFavorites - ${favChannel.position} - channel.id ${id} not found in ChannelStore`);
+            }
+        }
+
+        sortedChannels.sort((a, b) => a.position - b.position);
+        // Re-index sequentially to eliminate gaps.
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            sortedChannels[i].position = i;
+        }
+        FavoritesLogger.log(
+            "refreshFavorites - sortedChannels: ",
+            sortedChannels,
+        );
+
+        const favoritesSettingsProto: Favorites = FavoritesSettingsActionCreators.create();
+        for (let i: number = 0, sortedChannelsLen: number = sortedChannels.length; i < sortedChannelsLen; i++) {
+            const channel: FavoriteChannel & { id: string; } = sortedChannels[i];
+            const newFavChannel: FavoriteChannel = FavoriteChannelActionCreators.create({
+                nickname: channel.nickname,
+                type: channel.type,
+                position: channel.position,
+                parentId: channel.parentId,
+            });
+            favoritesSettingsProto.favoriteChannels[channel.id] = newFavChannel;
+        }
+        // FavoritesLogger.log(
+        //     "refreshFavorites - favoritesSettingsProto: ",
+        //     favoritesSettingsProto,
+        // );
+
+        const settingsProto: any = PreloadedUserSettingsActionCreators.ProtoClass.create();
+        settingsProto.favorites = favoritesSettingsProto;
+        FavoritesLogger.log(
+            "refreshFavorites - settingsProto: ",
+            settingsProto,
+        );
+
+        await FluxDispatcher.dispatch({
+            type: "USER_SETTINGS_PROTO_UPDATE",
+            local: true,
+            partial: true,
+            settings: {
+                type: 1,
+                proto: settingsProto,
+            },
+        });
+
+        if (settings.store.firstRun === undefined) {
+            // await DataStore.set(FAVORITES_DATA_KEY, { favoriteChannels: favoritesSettingsProto.favoriteChannels, muted: preloadedUserSettingsFavorites.muted });
+            settings.store.firstRun = false;
+            FavoritesLogger.log(
+                "First run detected, saved sorted channels to DataStore and set firstRun to false.",
+            );
+        }
+
+        // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
+    } catch (err) {
+        FavoritesLogger.error("refreshFavorites - error: ", err);
+        Toasts.show({
+            type: Toasts.Type.FAILURE,
+            message: "Failed to refresh favorites.",
+            id: Toasts.genId(),
+        });
+    }
+}
+
+function createAddToFavoritesMenuItem(channel: Channel): ReactElement {
+    return (
         <Menu.MenuItem
-            id="AddFavorite"
-            label={<span>Add to Favorites</span>}
-            icon={FavoriteIcon}
-            action={() => {
-                addToFavorite(channel);
+            id="add-to-favorites"
+            label="Add to Favorites 1"
+            iconLeft={FavoriteIcon}
+            leadingAccessory={{
+                type: "icon",
+                icon: FavoriteIcon
             }}
-        />,
+            action={() => addToFavorites(channel)}
+        />
     );
-};
+}
+
+function createRemoveFromFavoritesMenuItem(channel: Channel): ReactElement {
+    return (
+        <Menu.MenuItem
+            id="remove-from-favorites"
+            label="Remove from Favorites 1"
+            color="danger"
+            action={() => removeFromFavorites(channel)}
+        />
+    );
+}
+
+function favoritesChannelMenuPatch(children: Array<ReactElement<any> | null | undefined>,
+    props: ChannelContextProps): void {
+    const favoriteGroup: Array<ReactElement<any> | null | undefined> | null = findGroupChildrenByChildId(
+        ["favorite-channel"],
+        children,
+        false
+    );
+
+    if (favoriteGroup != null) {
+        const idx: number = favoriteGroup.findIndex(c => c?.props?.id === "favorite-channel");
+        // FavoritesLogger.log(
+        //     "favoriteGroup - idx: ",
+        //     idx
+        // );
+        if (idx !== -1) {
+            const { channel } = props;
+            // const preloadedUserSettingsFavorites: Favorites = await DataStore.get<Favorites>(FAVORITES_DATA_KEY) ?? { favoriteChannels: {}, muted: false };
+            // const preloadedUserSettingsFavorites = DataStore.get<Favorites>(FAVORITES_DATA_KEY).then(favorites => favorites ?? { favoriteChannels: {}, muted: false });
+
+            // FavoritesLogger.log("FavoritesCache: ", FavoritesCache);
+
+            if (FavoritesCache.favoriteChannels[channel.id] === undefined) {
+                FavoritesLogger.log(
+                    "Channel is not a favorite, adding add menu item.",
+                    channel,
+                );
+                favoriteGroup.splice(idx, 1, createAddToFavoritesMenuItem(channel));
+            } else {
+                FavoritesLogger.log(
+                    "Channel is already a favorite, adding remove menu item.",
+                    channel,
+                );
+                favoriteGroup.splice(idx, 1, createRemoveFromFavoritesMenuItem(channel));
+            }
+        }
+        // FavoritesLogger.log(
+        //     "favoriteGroup: ",
+        //     favoriteGroup
+        // );
+    }
+    // FavoritesLogger.log(
+    //     "children: ",
+    //     children
+    // );
+}
+
+// function favoritesChannelMenuPatch(children: Array<ReactElement<any> | null | undefined>,
+//     props: ChannelContextProps): void {
+//     const favoriteGroup: Array<ReactElement<any> | null | undefined> | null = findGroupChildrenByChildId(
+//         ["favorite-channel"],
+//         children,
+//         false
+//     );
+
+//     if (favoriteGroup != null) {
+//         const idx: number = favoriteGroup.findIndex(c => c?.props?.id === "favorite-channel");
+//         FavoritesLogger.log(
+//             "favoriteGroup - idx: ",
+//             idx
+//         );
+//         if (idx !== -1) {
+//             const { channel } = props;
+//             // const preloadedUserSettingsFavorites: Favorites = await DataStore.get<Favorites>(FAVORITES_DATA_KEY) ?? { favoriteChannels: {}, muted: false };
+//             const preloadedUserSettingsFavorites = DataStore.get<Favorites>(FAVORITES_DATA_KEY).then(favorites => favorites ?? { favoriteChannels: {}, muted: false });
+
+//             if (preloadedUserSettingsFavorites.favoriteChannels[channel.id] === undefined) {
+//                 FavoritesLogger.log(
+//                     "Channel is not a favorite, adding add menu item.",
+//                     channel,
+//                 );
+//                 favoriteGroup.splice(idx, 1, createAddToFavoritesMenuItem(channel));
+//             } else {
+//                 FavoritesLogger.log(
+//                     "Channel is already a favorite, adding remove menu item.",
+//                     channel,
+//                 );
+//                 favoriteGroup.splice(idx, 1, createRemoveFromFavoritesMenuItem(channel));
+//             }
+//         }
+//         FavoritesLogger.log(
+//             "favoriteGroup: ",
+//             favoriteGroup
+//         );
+//     }
+// FavoritesLogger.log(
+//     "children: ",
+//     children
+// );
+// }
 
 export default definePlugin({
     name: "Favorites",
@@ -358,32 +551,109 @@ export default definePlugin({
     tags: ["Appearance", "Customisation", "Organisation", "Servers"],
     authors: [Devs.insilications],
     dependencies: ["ContextMenuAPI"],
-    start() {
-        // DeveloperMode needs to be enabled for the context menu to be shown
-        // DeveloperMode.updateSetting(true);
-        console.log("Favorites plugin started");
+    settings,
+    async start(): Promise<void> {
+        await sleep(3000);
+        FavoritesLogger.log("Favorites plugin started");
+        // settings.store.favorites = undefined;
+        // settings.store.firstRun = undefined;
+        await refreshFavorites();
+        // addContextMenuPatch("channel-context", favoritesChannelMenuPatch);
     },
     contextMenus: {
-        "channel-context": contextMenuPatch,
+        "channel-context": favoritesChannelMenuPatch,
     },
-    // flux: {
-    //     USER_SETTINGS_PROTO_UPDATE(settingsUpdate: UserSettingsProtoStoreType) {
-    //         FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE received: ", settingsUpdate);
-    //         // const protoStatus = settingsUpdate.settings.proto.status;
+    startAt: StartAt.Init,
+    requiresRestart: true,
+    patches: [
+        // Patch to enable toggling Favorites server
+        {
+            find: "={isPremium",
+            replacement: {
+                match: /(isPremiumExactly:)\i/,
+                replace: "$1() => true"
+            }
+        },
+        // {
+        //     find: "\"Unknown user settings error\"",
+        //     replacement: {
+        //         match: /throw this\.logger\.log\("Unknown user settings error"\),/,
+        //         replace: "return;"
+        //     }
+        // },
+        //
 
-    //         // if (protoStatus !== undefined) {
-    //         //     const steamStatus: SteamStatus = settings.store[`${protoStatus.status.value}Status`];
+        {
+            find: '"UserSettingsProtoStore"',
+            replacement: [
+                {
+                    // Overwrite incoming connection settings proto with our local settings
+                    match: /(?<=USER_SETTINGS_PROTO_UPDATE_EDIT_INFO:function\((\i)\){)/,
+                    replace: (_, props) => `$self.handleProtoUpdateEditInfo(${props});`
+                },
+            ]
+        },
+    ],
+    handleProtoUpdateEditInfo(e: UserSettingsProtoUpdateEditInfoEvent) {
+        // USER_SETTINGS_PROTO_UPDATE_EDIT_INFO
+        try {
+            // if (proto == null || typeof proto === "string") return;
+            FavoritesLogger.log("handleProtoUpdateEditInfo: ", e);
 
-    //         //     if (settings.store.goInvisibleIfActivityIsHidden && !protoStatus.showCurrentGame.value) {
-    //         //         open(`steam://friends/status/${SteamStatus.Invisible}`);
+            const favorites: unknown = e.settings.changes?.protoToSave?.favorites;
+            if (isFavorite(favorites)) {
+                FavoritesLogger.log("handleProtoUpdateEditInfo received with favorites: ", favorites);
+                e.settings.changes.protoToSave.favorites = undefined;
+            } else {
+                FavoritesLogger.warn("handleProtoUpdateEditInfo received without favorites data.");
+            }
 
-    //         //         return;
-    //         //     }
-    //         //     if (steamStatus === SteamStatus.None) { return; }
+        } catch (err) {
+            FavoritesLogger.error("handleProtoUpdateEditInfo: ", err);
+        }
+    },
+    flux: {
+        // USER_SETTINGS_PROTO_UPDATE(settingsUpdate: UserSettingsProtoStoreType): void {
+        async USER_SETTINGS_PROTO_UPDATE(settingsUpdate: UserSettingsProtoUpdateEvent): Promise<void> {
+            // FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE received: ", settingsUpdate);
+            // if (settingsUpdate.local) {
+            // DUPLICATED??????????
+            const favorites: unknown = settingsUpdate.settings.proto?.favorites;
+            if (isFavorite(favorites)) {
+                FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE - received with favorites: ", favorites);
+                await DataStore.set(FAVORITES_DATA_KEY, favorites);
+                updateFavoritesCache(favorites.favoriteChannels, favorites.muted);
+                FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE - FavoritesCache: ", FavoritesCache);
+            } else {
+                FavoritesLogger.warn("USER_SETTINGS_PROTO_UPDATE - received without favorites data.");
+            }
+            // }
+        },
+        // USER_SETTINGS_PROTO_UPDATE_EDIT_INFO(settingsUpdate: UserSettingsProtoUpdateEditInfoEvent): void {
+        //     FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO received: ", settingsUpdate);
+        //     const favorites = settingsUpdate.settings.changes?.protoToSave?.favorites;
+        //     if (isFavorite(favorites)) {
+        //         FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO received with favorites: ", settingsUpdate);
 
-    //         //     // Open steam protocol URI for status change
-    //         //     open(`steam://friends/status/${steamStatus}`);
-    //         // }
-    //     }
-    // }
+        //         if (Array.isArray(settingsUpdate.settings.changes?.errorCallbacks)) {
+        //             FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO received errorCallbacks 0: ", settingsUpdate.settings.changes?.errorCallbacks);
+        //             settingsUpdate.settings.changes.errorCallbacks = [];
+        //             // settingsUpdate.settings.changes.errorCallbacks[0] = () => {
+        //             //     FavoritesLogger.warn("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO error callback invoked. Refreshing favorites.");
+        //             //     // refreshFavorites();
+        //             // };
+        //             FavoritesLogger.log("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO received errorCallbacks 1: ", settingsUpdate.settings.changes?.errorCallbacks);
+
+        //         }
+        //     } else {
+        //         FavoritesLogger.warn("USER_SETTINGS_PROTO_UPDATE_EDIT_INFO received without favorites data.");
+        //     }
+        // },
+        // USER_SETTINGS_PROTO_ENQUEUE_UPDATE(settingsUpdate: any): void {
+        //     FavoritesLogger.log("USER_SETTINGS_PROTO_ENQUEUE_UPDATE received: ", settingsUpdate);
+        // },
+        // USER_SETTINGS_PROTO_LOAD_IF_NECESSARY(settingsUpdate: any): void {
+        //     FavoritesLogger.log("USER_SETTINGS_PROTO_LOAD_IF_NECESSARY received: ", settingsUpdate);
+        // }
+    }
 });

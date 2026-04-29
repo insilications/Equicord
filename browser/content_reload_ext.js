@@ -1,35 +1,45 @@
-const connectToReloader = () => {
+const connectToReloader = (retryDelay = 1000) => {
   const ws = new WebSocket('ws://localhost:8087');
-  console.log('Vencord Extension Auto-Reloader');
 
   ws.onopen = () => {
     console.log('Connected to Vencord Extension Auto-Reloader');
+    // Reset delay on successful connection
+    retryDelay = 2000;
+  };
+
+  // Catch the async error so it doesn't cause unhandled exception warnings
+  // (Note: The browser will still log a native net::ERR_CONNECTION_REFUSED warning,
+  // which is unavoidable, but our code will handle it cleanly).
+  ws.onerror = () => {
+    console.debug('Vencord Extension Auto-Reloader server is currently unreachable.');
   };
 
   ws.onmessage = (event) => {
-    // Ignore the heartbeat pings from esbuild server
     if (event.data === 'ping') return;
 
     if (event.data === 'reload') {
       console.log('Reloading extension and refreshing page...');
 
       try {
-        // 1. Send a message to wake up the background script and reload the extension
         chrome.runtime.sendMessage({ action: 'RELOAD_EXTENSION' });
       } catch (err) {
-        // If the extension context is already invalid, this might throw, which is fine
+        // Expected if extension context was invalidated by Chrome
       }
 
-      // 2. Reload the actual web page to inject the newly compiled content scripts
       setTimeout(() => {
         window.location.reload();
-      }, 200);
+      }, 600);
     }
   };
 
   ws.onclose = () => {
-    // Since the web page stays alive, this timeout will reliably execute
-    setTimeout(connectToReloader, 1000);
+    // Exponential backoff: increase the delay slightly each time it fails,
+    // capping out at a maximum of 5 seconds between attempts.
+    const nextDelay = Math.min(retryDelay * 1.5, 5000);
+
+    setTimeout(() => {
+      connectToReloader(nextDelay);
+    }, retryDelay);
   };
 };
 

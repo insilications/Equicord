@@ -25,7 +25,7 @@ import path, { join } from "path";
 import Zip from "zip-local";
 import { WebSocketServer } from 'ws';
 
-import { BUILD_TIMESTAMP, commonOpts, globPlugins, IS_DEV, IS_RELOAD_EXT, IS_REPORTER, IS_COMPANION_TEST, VERSION, commonRendererPlugins, buildOrWatchAll, stringifyValues, IS_ANTI_CRASH_TEST } from "./common.mjs";
+import { BUILD_TIMESTAMP, commonOpts, globPlugins, IS_DEV, IS_RELOAD_EXT, IS_REPORTER, IS_COMPANION_TEST, IS_STANDALONE, VERSION, commonRendererPlugins, buildOrWatchAll, stringifyValues, IS_ANTI_CRASH_TEST } from "./common.mjs";
 
 /**
  * @type {import("esbuild").BuildOptions}

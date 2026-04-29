@@ -168,16 +168,28 @@ export interface InAppFeedbackSettings {
     inAppFeedbackStates: Record<string, any>;
 }
 
-export interface FavoriteChannels {
+export enum FavouriteChannelType {
+    // Unset a favorite channel or DM?
+    UNSET = 0,
+    // References a channel or DM
+    CHANNEL_DM = 1,
+    // Section containing a channel or DM
+    SECTION = 2,
+}
+
+export interface FavoriteChannel {
     nickname: string;
-    type: number;
+    type: FavouriteChannelType;
     position: number;
     parentId: string;
 }
 
+export interface FavoriteChannels {
+    [channelId: string]: FavoriteChannel;
+}
 
 export interface Favorites {
-    favoriteChannels: Record<string, FavoriteChannels>;
+    favoriteChannels: FavoriteChannels;
     muted: boolean;
 }
 

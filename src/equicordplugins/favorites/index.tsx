@@ -563,7 +563,8 @@ export default definePlugin({
     contextMenus: {
         "channel-context": favoritesChannelMenuPatch,
     },
-    startAt: StartAt.Init,
+//     startAt: StartAt.Init,
+    startAt: StartAt.WebpackReady,
     requiresRestart: true,
     patches: [
         // Patch to enable toggling Favorites server

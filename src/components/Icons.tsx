@@ -1646,6 +1646,8 @@ export function HistoryIcon(props: IconProps) {
                 style={{ fill: "none" }}
             />
         </Icon>
+    );
+}
 
 export function FavoriteIcon(props: IconProps) {
     return (

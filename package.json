@@ -89,6 +89,7 @@
         "type-fest": "catalog:",
         "typescript": "catalog:",
         "typescript-transform-paths": "catalog:",
+        "ws": "^8.22.2",
         "zip-local": "catalog:"
     },
     "engines": {

@@ -20,7 +20,7 @@ import {
     FluxDispatcher,
     GuildStore,
     Menu,
-    Toasts,
+//     Toasts,
     UserSettingsActionCreators,
     UserSettingsProtoStore
 } from "@webpack/common";
@@ -64,11 +64,11 @@ export const settings = definePluginSettings({}).withPrivateSettings<{
 async function addToFavorites(channel: Channel): Promise<void> {
     try {
         if (!channel) {
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Channel information not available.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
         const channelId: string = channel.id;
@@ -76,11 +76,11 @@ async function addToFavorites(channel: Channel): Promise<void> {
 
         const guildId: string = channel.guild_id;
         if (!guildId) {
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Channel information not available.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
         FavoritesLogger.log("addToFavorites - guildId: ", guildId);
@@ -90,11 +90,11 @@ async function addToFavorites(channel: Channel): Promise<void> {
             FavoritesLogger.error("addToFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
             FavoritesLogger.error("addToFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
             FavoritesLogger.error("addToFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Failed to add to favorites.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Failed to add to favorites.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
 
@@ -181,22 +181,22 @@ async function addToFavorites(channel: Channel): Promise<void> {
         // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
     } catch (err) {
         FavoritesLogger.error("addToFavorites - error: ", err);
-        Toasts.show({
-            type: Toasts.Type.FAILURE,
-            message: "Failed to add channel to favorites.",
-            id: Toasts.genId(),
-        });
+//         Toasts.show({
+//             type: Toasts.Type.FAILURE,
+//             message: "Failed to add channel to favorites.",
+//             id: Toasts.genId(),
+//         });
     }
 }
 
 async function removeFromFavorites(channel: Channel): Promise<void> {
     try {
         if (!channel) {
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Channel information not available.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
         const channelId: string = channel.id;
@@ -204,11 +204,11 @@ async function removeFromFavorites(channel: Channel): Promise<void> {
 
         const guildId: string = channel.guild_id;
         if (!guildId) {
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Channel information not available.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Channel information not available.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
         FavoritesLogger.log("removeFromFavorites -guildId: ", guildId);
@@ -218,11 +218,11 @@ async function removeFromFavorites(channel: Channel): Promise<void> {
             FavoritesLogger.error("removeFromFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
             FavoritesLogger.error("removeFromFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
             FavoritesLogger.error("removeFromFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Failed to remove from favorites.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Failed to remove from favorites.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
 
@@ -308,11 +308,11 @@ async function removeFromFavorites(channel: Channel): Promise<void> {
         // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
     } catch (err) {
         FavoritesLogger.error("removeFromFavorites - error: ", err);
-        Toasts.show({
-            type: Toasts.Type.FAILURE,
-            message: "Failed to remove channel from favorites.",
-            id: Toasts.genId(),
-        });
+//         Toasts.show({
+//             type: Toasts.Type.FAILURE,
+//             message: "Failed to remove channel from favorites.",
+//             id: Toasts.genId(),
+//         });
     }
 }
 
@@ -323,11 +323,11 @@ async function refreshFavorites(): Promise<void> {
             FavoritesLogger.error("refreshFavorites - FavoritesSettingsActionCreators: ", FavoritesSettingsActionCreators);
             FavoritesLogger.error("refreshFavorites - FavoriteChannelActionCreators: ", FavoriteChannelActionCreators);
             FavoritesLogger.error("refreshFavorites - BINARY_READ_OPTIONS: ", BINARY_READ_OPTIONS);
-            Toasts.show({
-                type: Toasts.Type.FAILURE,
-                message: "Failed to refresh favorites.",
-                id: Toasts.genId(),
-            });
+//             Toasts.show({
+//                 type: Toasts.Type.FAILURE,
+//                 message: "Failed to refresh favorites.",
+//                 id: Toasts.genId(),
+//             });
             return;
         }
 
@@ -420,11 +420,11 @@ async function refreshFavorites(): Promise<void> {
         // updateFavoritesCache(favoritesSettingsProto.favoriteChannels, preloadedUserSettingsFavorites.muted);
     } catch (err) {
         FavoritesLogger.error("refreshFavorites - error: ", err);
-        Toasts.show({
-            type: Toasts.Type.FAILURE,
-            message: "Failed to refresh favorites.",
-            id: Toasts.genId(),
-        });
+//         Toasts.show({
+//             type: Toasts.Type.FAILURE,
+//             message: "Failed to refresh favorites.",
+//             id: Toasts.genId(),
+//         });
     }
 }
 
@@ -563,7 +563,8 @@ export default definePlugin({
     contextMenus: {
         "channel-context": favoritesChannelMenuPatch,
     },
-    startAt: StartAt.Init,
+//     startAt: StartAt.Init,
+    startAt: StartAt.WebpackReady,
     requiresRestart: true,
     patches: [
         // Patch to enable toggling Favorites server
